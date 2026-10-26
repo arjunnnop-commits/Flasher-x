@@ -4,7 +4,7 @@ on:
   workflow_dispatch:
   push:
     paths:
-      - '**.zip'
+      - 'FAIRY_FLASHER_X_V2_Source.zip'
       - '.github/workflows/build.yml'
 
 permissions:
@@ -13,10 +13,6 @@ permissions:
 jobs:
   build:
     runs-on: ubuntu-latest
-    env:
-      ANDROID_HOME: /usr/local/lib/android/sdk
-      ANDROID_SDK_ROOT: /usr/local/lib/android/sdk
-
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
@@ -27,51 +23,27 @@ jobs:
           distribution: temurin
           java-version: '17'
 
-      - name: Locate Android SDK tools
-        shell: bash
-        run: |
-          set -euxo pipefail
-          echo "ANDROID_HOME=$ANDROID_HOME"
-          ls -la "$ANDROID_HOME"
-          SDKMANAGER="$(find "$ANDROID_HOME/cmdline-tools" -type f -name sdkmanager 2>/dev/null | head -n 1)"
-          if [ -z "$SDKMANAGER" ]; then
-            echo "sdkmanager not found in preinstalled Android SDK"
-            exit 1
-          fi
-          echo "SDKMANAGER=$SDKMANAGER" >> "$GITHUB_ENV"
-          echo "$(dirname "$SDKMANAGER")" >> "$GITHUB_PATH"
-          echo "$(dirname "$(dirname "$SDKMANAGER")")/platform-tools" >> "$GITHUB_PATH"
+      - name: Set up Android SDK
+        uses: android-actions/setup-android@v3
 
-      - name: Accept licenses and install required SDK packages
+      - name: Install Android SDK packages
+        run: |
+          yes | sdkmanager --licenses || true
+          sdkmanager "platform-tools" "platforms;android-35" "build-tools;35.0.0"
+
+      - name: Extract project ZIP
         shell: bash
         run: |
           set -euo pipefail
-          yes | "$SDKMANAGER" --sdk_root="$ANDROID_HOME" --licenses || true
-          "$SDKMANAGER" --sdk_root="$ANDROID_HOME" --install \
-            "platform-tools" \
-            "platforms;android-35" \
-            "build-tools;35.0.0"
-
-      - name: Extract source ZIP
-        shell: bash
-        run: |
-          set -euo pipefail
-          mkdir -p source
-          ZIP_FILE="$(find . -maxdepth 2 -type f -iname '*.zip' ! -path './source/*' -print -quit)"
-          if [ -z "$ZIP_FILE" ]; then
-            echo "No source ZIP found in repository root. Upload FairyFlasherX-Android-Source.zip first."
+          test -f FAIRY_FLASHER_X_V2_Source.zip || {
+            echo "Missing FAIRY_FLASHER_X_V2_Source.zip in repository root."
             exit 1
-          fi
-          echo "Extracting $ZIP_FILE"
-          unzip -q "$ZIP_FILE" -d source
-          PROJECT_DIR="$(find source -type f -name settings.gradle.kts -print -quit | xargs -r dirname)"
-          if [ -z "$PROJECT_DIR" ] || [ ! -f "$PROJECT_DIR/app/build.gradle.kts" ]; then
-            echo "Could not locate Android Gradle project in ZIP. Extracted files:"
-            find source -maxdepth 5 -type f | head -100
-            exit 1
-          fi
-          echo "PROJECT_DIR=$PROJECT_DIR" >> "$GITHUB_ENV"
-          echo "Project found at: $PROJECT_DIR"
+          }
+          mkdir -p project
+          unzip -q FAIRY_FLASHER_X_V2_Source.zip -d project
+          test -f project/settings.gradle.kts
+          test -f project/app/build.gradle.kts
+          echo "Project extracted successfully"
 
       - name: Set up Gradle
         uses: gradle/actions/setup-gradle@v4
@@ -79,22 +51,16 @@ jobs:
           gradle-version: '8.9'
 
       - name: Build debug APK
-        shell: bash
-        run: gradle --no-daemon --stacktrace -p "$PROJECT_DIR" assembleDebug
+        run: gradle --no-daemon --stacktrace -p project assembleDebug
 
-      - name: Verify APK exists
-        shell: bash
-        run: |
-          set -euo pipefail
-          APK="$PROJECT_DIR/app/build/outputs/apk/debug/app-debug.apk"
-          test -s "$APK"
-          ls -lh "$APK"
+      - name: Verify APK
+        run: test -s project/app/build/outputs/apk/debug/app-debug.apk
 
-      - name: Upload APK
+      - name: Upload APK artifact
         uses: actions/upload-artifact@v4
         with:
           name: FAIRY-FLASHER-X-APK
-          path: source/**/app/build/outputs/apk/debug/app-debug.apk
+          path: project/app/build/outputs/apk/debug/app-debug.apk
           if-no-files-found: error
           retention-days: 14
           
