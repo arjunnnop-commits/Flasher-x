@@ -1,17 +1,17 @@
-name: Build Android APK
+name: Build FAIRY FLASHER X APK
 
 on:
   workflow_dispatch:
   push:
-    paths:
-      - 'FairyFlasherX-Android-Source.zip'
-      - '.github/workflows/build.yml'
+    branches:
+      - main
 
 permissions:
   contents: read
 
 jobs:
   build:
+    name: Build Android APK
     runs-on: ubuntu-latest
 
     steps:
@@ -27,41 +27,67 @@ jobs:
       - name: Set up Android SDK
         uses: android-actions/setup-android@v3
         with:
-          packages: 'platform-tools, platforms;android-35, build-tools;35.0.0'
+          accept-android-sdk-licenses: true
+          packages: |
+            platform-tools
+            platforms;android-35
+            build-tools;35.0.0
 
-      - name: Accept Android SDK licenses
-        run: yes | sdkmanager --licenses || true
-
-      - name: Extract Android project
+      - name: Verify and extract project ZIP
+        shell: bash
         run: |
+          set -euo pipefail
           mkdir -p extracted
-          ZIP_FILE=$(find . -maxdepth 2 -type f -iname '*.zip' | head -n 1)
+
+          ZIP_FILE="$(find . -maxdepth 2 -type f -iname '*.zip' \
+            ! -path './extracted/*' -print -quit)"
+
           if [ -z "$ZIP_FILE" ]; then
-            echo "ERROR: Project ZIP not found in repository."
+            echo "ERROR: Source ZIP was not found in the repository root."
             exit 1
           fi
+
+          echo "Using source archive: $ZIP_FILE"
           unzip -q "$ZIP_FILE" -d extracted
-          find extracted -name settings.gradle.kts -print
+
+          if [ ! -f extracted/FairyFlasherX/settings.gradle.kts ]; then
+            echo "ERROR: Expected FairyFlasherX/settings.gradle.kts not found."
+            echo "ZIP contents:"
+            find extracted -maxdepth 4 -type f | head -100
+            exit 1
+          fi
+
+          if [ ! -f extracted/FairyFlasherX/app/build.gradle.kts ]; then
+            echo "ERROR: App Gradle configuration not found."
+            exit 1
+          fi
 
       - name: Set up Gradle
         uses: gradle/actions/setup-gradle@v4
         with:
           gradle-version: '8.9'
 
-      - name: Build APK
+      - name: Build debug APK
+        working-directory: extracted/FairyFlasherX
+        run: gradle --no-daemon --stacktrace assembleDebug
+
+      - name: Verify APK
+        shell: bash
         run: |
-          PROJECT_DIR=$(dirname "$(find extracted -name settings.gradle.kts -print -quit)")
-          if [ -z "$PROJECT_DIR" ] || [ ! -f "$PROJECT_DIR/app/build.gradle.kts" ]; then
-            echo "ERROR: Android Gradle project not found in ZIP."
+          set -euo pipefail
+          APK="extracted/FairyFlasherX/app/build/outputs/apk/debug/app-debug.apk"
+
+          if [ ! -s "$APK" ]; then
+            echo "ERROR: APK was not generated."
             exit 1
           fi
-          cd "$PROJECT_DIR"
-          gradle --no-daemon assembleDebug
 
-      - name: Upload APK
+          ls -lh "$APK"
+
+      - name: Upload APK artifact
         uses: actions/upload-artifact@v4
         with:
-          name: Fairy-Flasher-X-APK
-          path: extracted/**/app/build/outputs/apk/debug/*.apk
+          name: FAIRY-FLASHER-X-APK
+          path: extracted/FairyFlasherX/app/build/outputs/apk/debug/app-debug.apk
           if-no-files-found: error
           retention-days: 14
