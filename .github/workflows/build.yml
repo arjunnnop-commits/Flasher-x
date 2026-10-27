@@ -1,66 +1,72 @@
-name: Build FAIRY FLASHER X APK
+name: Build Fairy Flasher X APK
 
 on:
-  workflow_dispatch:
   push:
-    paths:
-      - 'FAIRY_FLASHER_X_V2_Source.zip'
-      - '.github/workflows/build.yml'
-
-permissions:
-  contents: read
+  workflow_dispatch:
 
 jobs:
   build:
     runs-on: ubuntu-latest
     steps:
-      - name: Checkout repository
-        uses: actions/checkout@v4
+      - uses: actions/checkout@v4
 
-      - name: Set up Java 17
-        uses: actions/setup-java@v4
+      # Works in two ways:
+      #  1) normal repo: settings.gradle.kts is in the repo root
+      #  2) you uploaded the source .zip as-is: it is unpacked here automatically
+      - name: Find project (unpacks a .zip from the repo root if needed)
+        id: src
+        shell: bash
+        run: |
+          ROOT="."
+          if [ ! -f settings.gradle.kts ] && [ ! -f settings.gradle ]; then
+            shopt -s nullglob
+            mkdir -p _unpacked
+            for z in *.zip; do
+              echo "Unpacking $z"
+              unzip -o -q "$z" -d _unpacked
+            done
+            S=$(find _unpacked -name settings.gradle.kts -not -path '*/__MACOSX/*' | head -n 1)
+            if [ -z "$S" ]; then
+              echo "::error::No Gradle project found. Upload the source .zip to the repository root."
+              exit 1
+            fi
+            ROOT=$(dirname "$S")
+          fi
+          echo "Project root: $ROOT"
+          echo "root=$ROOT" >> "$GITHUB_OUTPUT"
+
+      - uses: actions/setup-java@v4
         with:
           distribution: temurin
           java-version: '17'
 
-      - name: Set up Android SDK
-        uses: android-actions/setup-android@v3
+      - uses: android-actions/setup-android@v3
 
-      - name: Install Android SDK packages
-        run: |
-          yes | sdkmanager --licenses || true
-          sdkmanager "platform-tools" "platforms;android-35" "build-tools;35.0.0"
-
-      - name: Extract project ZIP
-        shell: bash
-        run: |
-          set -euo pipefail
-          test -f FAIRY_FLASHER_X_V2_Source.zip || {
-            echo "Missing FAIRY_FLASHER_X_V2_Source.zip in repository root."
-            exit 1
-          }
-          mkdir -p project
-          unzip -q FAIRY_FLASHER_X_V2_Source.zip -d project
-          test -f project/settings.gradle.kts
-          test -f project/app/build.gradle.kts
-          echo "Project extracted successfully"
-
-      - name: Set up Gradle
-        uses: gradle/actions/setup-gradle@v4
+      - uses: gradle/actions/setup-gradle@v4
         with:
           gradle-version: '8.9'
 
       - name: Build debug APK
-        run: gradle --no-daemon --stacktrace -p project assembleDebug
+        shell: bash
+        working-directory: ${{ steps.src.outputs.root }}
+        run: gradle --no-daemon --stacktrace assembleDebug 2>&1 | tee "$GITHUB_WORKSPACE/build.log"
 
-      - name: Verify APK
-        run: test -s project/app/build/outputs/apk/debug/app-debug.apk
+      - name: Collect APK
+        shell: bash
+        run: |
+          mkdir -p out
+          find "${{ steps.src.outputs.root }}" -path '*outputs/apk/debug/*.apk' -exec cp {} out/FairyFlasherX.apk \;
+          ls -la out
 
-      - name: Upload APK artifact
+      - name: Upload APK
         uses: actions/upload-artifact@v4
         with:
-          name: FAIRY-FLASHER-X-APK
-          path: project/app/build/outputs/apk/debug/app-debug.apk
-          if-no-files-found: error
-          retention-days: 14
-          
+          name: FairyFlasherX-APK
+          path: out/FairyFlasherX.apk
+
+      - name: Upload build log (only if the build failed)
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: build-log
+          path: build.log
